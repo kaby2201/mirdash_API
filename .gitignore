@@ -1,0 +1,7 @@
+.idea
+bin
+cmake-build-*
+obj
+venv
+*.pyc
+*.swp

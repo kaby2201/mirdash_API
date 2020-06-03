@@ -24,8 +24,8 @@ namespace backend.Services
     {
         private Timer _timer;
         
-
-        public RobotService(ILogger<RobotService> logger, IHttpClientFactory clientFactory, IServiceProvider services) 
+        
+        public RobotService(ILogger<RobotService> logger, IHttpClientFactory clientFactory, IServiceProvider services)
             : base(logger, clientFactory, services)
         {
         }
@@ -33,7 +33,9 @@ namespace backend.Services
         public Task StartAsync(CancellationToken stoppingToken)
         {
             _logger.LogInformation("Timed Hosted Service running.");
+
             _timer = new Timer(BackgroundWork, null, TimeSpan.Zero, TimeSpan.FromSeconds(5));
+
             return Task.CompletedTask;
         }
 
@@ -66,17 +68,10 @@ namespace backend.Services
                 db = Services.CreateScope().ServiceProvider.GetRequiredService<ApplicationDbContext>();
                 foreach (var host in Hosts)
                 {
-                    try
-                    {
-                        await LoadMissions(host, db);
-                        await LoadStatus(host, db);
-                        await PostToQueue(host, db);
-                        await GetQueue(host, db);
-                    }
-                    catch (Exception e)
-                    {
-                        _logger.LogError(e, "Exception at Services.RobotService.BackgroundWork");
-                    }
+                    await LoadStatus(host, db);
+                    await LoadMissions(host, db);
+                    //await PostToQueue(host, db);
+                    //await GetQueue(host, db);
                 }
             }
             catch (Exception e)

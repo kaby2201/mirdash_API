@@ -4,7 +4,6 @@ namespace backend.Models.Robots
 {
     public class Position
     {
-        [JsonIgnore]
         public int Id { get; set; }
         
         public float Orientation { get; set; }

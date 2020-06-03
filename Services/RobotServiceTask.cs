@@ -1,22 +1,14 @@
 ﻿using System;
 using System.Linq;
-using System.Text;
 using backend.Data;
 using backend.Models;
 using System.Net.Http;
-using Newtonsoft.Json;
-using System.Threading;
 using System.Text.Json;
 using System.Threading.Tasks;
-using System.Net.Http.Headers;
 using System.Collections.Generic;
-using System.IO;
-using Microsoft.Extensions.Hosting;
-using Microsoft.Extensions.Logging;
+using backend.Models.Robots;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.DependencyInjection;
-using Npgsql;
-using JsonSerializer = System.Text.Json.JsonSerializer;
+using Microsoft.Extensions.Logging;
 
 namespace backend.Services
 {
@@ -44,6 +36,39 @@ namespace backend.Services
             _client = clientFactory.CreateClient();
         }
 
+        protected async Task LoadStatus(Robot host, ApplicationDbContext db)
+        {
+            try
+            {
+                _client.DefaultRequestHeaders.Accept.Clear();
+                var response = await _client.SendAsync(HttpRequestMessage(host, "/status"));
+
+                if (response.IsSuccessStatusCode)
+                {
+                    
+                    await using var responseStream = await response.Content.ReadAsStreamAsync();
+                    var updateRobot = await JsonSerializer.DeserializeAsync<Robot>(responseStream, _options);
+                    
+                    // Update existing values
+                    updateRobot.Id = host.Id;
+                    updateRobot.BasePath = host.BasePath;
+                    updateRobot.Token = host.Token;
+                    updateRobot.IsOnline = true;
+                    updateRobot.VelocityId = host.VelocityId;
+                    updateRobot.PositionId = host.PositionId;
+                    
+                    db.Robots.Update(updateRobot);
+                    await db.SaveChangesAsync();
+                }
+            }
+            catch (Exception e)
+            {
+                _logger.LogCritical(e.Message);
+                _logger.LogCritical("The Robot may be is offline: No status could be loaded");
+            }
+        }
+
+
         protected async Task LoadMissions(Robot host, ApplicationDbContext db)
         {
             try
@@ -60,9 +85,16 @@ namespace backend.Services
                     foreach (var mission in missions)
                     {
                         mission.RobotId = host.Id;
-                        if (!db.Missions.Any(m => m.Name.Contains(mission.Name)
-                                                  && m.RobotId.Equals(mission.RobotId)))
-                            db.Missions.Add(mission);
+                        if (!db.Missions.Any(m => m.Guid.Contains(mission.Guid) && m.Url.Equals(mission.Url)))
+                        {
+                            db.Missions.Update(mission);
+                        }
+                    }
+                    await db.SaveChangesAsync();
+
+                    foreach (var mission in db.Missions)
+                    {
+                        await GetMissionByUrl(mission.Url, host, db);
                     }
 
                     host.IsOnline = true;
@@ -76,162 +108,115 @@ namespace backend.Services
             }
         }
 
-        protected async Task LoadStatus(Robot host, ApplicationDbContext db)
+        private async Task GetMissionByUrl(string url, Robot host, ApplicationDbContext db)
         {
-            // No need to send request when robot is offline
-            if (!host.IsOnline) return;
-
             try
             {
                 _client.DefaultRequestHeaders.Accept.Clear();
-                var response = await _client.SendAsync(HttpRequestMessage(host, "/status"));
-
+                var response = await _client.SendAsync(HttpRequestMessage(host, url));
                 if (response.IsSuccessStatusCode)
                 {
-                    await using var responseStream = await response.Content.ReadAsStreamAsync();
-                    var status = await JsonSerializer.DeserializeAsync<Status>(responseStream, _options);
-
-                    status.RobotId = host.Id;
-                    host.StateText = status.StateText;
-                    host.Hostname = status.RobotName;
-                    host.IsOnline = true;
-
-                    try
-                    {
-                        var previousStatus = db.Statuses.First(s => s.SerialNumber.Equals(status.SerialNumber));
-                        previousStatus.Errors = status.Errors;
-                        previousStatus.Footprint = status.Footprint;
-                        previousStatus.Moved = status.Moved;
-                        previousStatus.Position = status.Position;
-                        previousStatus.Uptime = status.Uptime;
-                        previousStatus.Velocity = status.Velocity;
-                        previousStatus.BatteryPercentage = status.BatteryPercentage;
-                        previousStatus.BatteryTimeRemaining = status.BatteryTimeRemaining;
-                        previousStatus.MapId = status.MapId;
-                        previousStatus.MissionText = status.MissionText;
-                        previousStatus.ModeId = status.ModeId;
-                        previousStatus.ModeText = status.ModeText;
-                        previousStatus.RobotModel = status.RobotModel;
-                        previousStatus.RobotName = status.RobotName;
-                        previousStatus.StateId = status.StateId;
-                        previousStatus.SessionId = status.SessionId;
-                        previousStatus.StateText = status.StateText;
-                        previousStatus.UserPrompt = status.UserPrompt;
-                        previousStatus.MissionQueueId = status.MissionQueueId;
-                        previousStatus.MissionQueueUrl = status.MissionQueueUrl;
-                        previousStatus.DistanceToNextTarget = status.DistanceToNextTarget;
-                        db.Update(previousStatus);
-                    }
-                    catch (InvalidOperationException) // No status yet
-                    {
-                        db.Statuses.Add(status);
-                    }
-
-                    db.Robots.Update(host);
+                    await using var respStream = await response.Content.ReadAsStreamAsync();
+                    var mission = await JsonSerializer.DeserializeAsync<Mission>(respStream, _options);
+                    Console.WriteLine("Tester..");
+                    var currentMission = db.Missions.First(s => s.Guid.Equals(mission.Guid));
+                    // Update in db
+                    mission.Id = currentMission.Id;
+                    db.Missions.Update(mission);
                     await db.SaveChangesAsync();
                 }
             }
             catch (Exception e)
             {
-                _logger.LogCritical("The Robot may be is offline: No status could be loaded");
+                Console.WriteLine(e);
+                throw;
             }
         }
 
-        protected async Task PostToQueue(Robot host, ApplicationDbContext db)
-        {
-            if (!host.IsOnline) return;
-            var IsAvailible = db.MissionQueueRequests.Any(s => s.RobotId.Equals(host.Id));
-            if (!IsAvailible)
-            {
-                return;
-            }
-
-            var res = db.MissionQueueRequests.First(
-                s => s.RobotId.Equals(host.Id));
-            try
-            {
-                var json = JsonSerializer.Serialize(res, _options);
-                var details = JsonConvert.DeserializeObject(json);
-                // var client = new HttpClient();
-                _client.DefaultRequestHeaders.Accept.Clear();
-                _client.DefaultRequestHeaders.Authorization =
-                    new AuthenticationHeaderValue("Basic", host.Token);
-                _client.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
-                await _client.PostAsJsonAsync(host.BasePath + "/mission_queue", details);
-
-                var id = await db.MissionQueueRequests.FindAsync(res.Id);
-                db.MissionQueueRequests.Remove(id);
-                await db.SaveChangesAsync();
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine();
-            }
-        }
-
-        protected async Task GetQueue(Robot host, ApplicationDbContext db)
-        {
-            if (!host.IsOnline) return;
-
-            try
-            {
-                _client.DefaultRequestHeaders.Accept.Clear();
-                var httpResponse = await _client.SendAsync(HttpRequestMessage(host, "/mission_queue"));
-
-                if (httpResponse.IsSuccessStatusCode)
-                {
-                    await using var responseStream = await httpResponse.Content.ReadAsStreamAsync();
-
-                    var response =
-                        await JsonSerializer.DeserializeAsync<List<MissionQueuesResponse>>(responseStream, _options);
-
-                    foreach (var queuesResponse in response)
-                    {
-                        queuesResponse.RobotId = host.Id;
-                        var isAvailable = db.MissionQueuesResponse
-                            .Where(s => s.Id.Equals(queuesResponse.Id))
-                            .Any(s => s.RobotId.Equals(host.Id));
-
-                        if (isAvailable)
-                            db.MissionQueuesResponse.Update(new MissionQueuesResponse
-                            {
-                                Id = queuesResponse.Id,
-                                Robot = host,
-                                RobotId = host.Id,
-                                State = queuesResponse.State,
-                                Url = queuesResponse.Url
-                            });
-                        else
-                        {
-                            var missq = new MissionQueuesResponse
-                            {
-                                Id = queuesResponse.Id,
-                                Robot = host,
-                                RobotId = host.Id,
-                                State = queuesResponse.State,
-                                Url = queuesResponse.Url
-                            };
-
-                            await db.MissionQueuesResponse.AddAsync(missq);
-                        }
-                    }
-
-                    await db.SaveChangesAsync();
-                }
-            }
-            catch (Exception e)
-            {
-                _logger.LogCritical("The Robot may be is offline");
-            }
-        }
+        //
+        // protected async Task PostToQueue(Robot host, ApplicationDbContext db)
+        // {
+        //     if (!host.IsOnline) return;
+        //     var IsAvailible = db.MissionQueueRequests.Any(s => s.RobotId.Equals(host.Id));
+        //     if (!IsAvailible)
+        //     {
+        //         return;
+        //     }
+        //
+        //     var res = db.MissionQueueRequests.First(
+        //         s => s.RobotId.Equals(host.Id));
+        //     try
+        //     {
+        //         var json = JsonSerializer.Serialize(res, _options);
+        //         var details = JsonConvert.DeserializeObject(json);
+        //        // var client = new HttpClient();
+        //         _client.DefaultRequestHeaders.Accept.Clear();
+        //         _client.DefaultRequestHeaders.Authorization =
+        //             new AuthenticationHeaderValue("Basic", host.Token);
+        //         _client.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+        //         await _client.PostAsJsonAsync(host.BasePath + "/mission_queue", details);
+        //
+        //         var id = await db.MissionQueueRequests.FindAsync(res.Id);
+        //         db.MissionQueueRequests.Remove(id);
+        //         await db.SaveChangesAsync();
+        //     }
+        //     catch (Exception ex)
+        //     {
+        //         Console.WriteLine();
+        //     }
+        // }
+        //
+        // public async Task GetQueue(Robot host, ApplicationDbContext db)
+        // {
+        //     if (!host.IsOnline) return;
+        //     
+        //     try
+        //     {
+        //         _client.DefaultRequestHeaders.Accept.Clear();
+        //         var httpResponse = await _client.SendAsync(HttpRequestMessage(host, "/mission_queue"));
+        //
+        //         if (httpResponse.IsSuccessStatusCode)
+        //         {
+        //             await using var responseStream = await httpResponse.Content.ReadAsStreamAsync();
+        //             
+        //             var response = await JsonSerializer.DeserializeAsync<List<MissionQueuesResponse>>(responseStream, _options);
+        //
+        //             foreach (var queuesResponse in response)
+        //             {
+        //                 queuesResponse.RobotId = host.Id;
+        //                 var isAvailable = db.MissionQueuesResponse.Any(s => s.Id.Equals(queuesResponse.Id));
+        //
+        //                 if (isAvailable)
+        //                     db.MissionQueuesResponse.Update(queuesResponse);
+        //                 else
+        //                 {
+        //                     var missq = new MissionQueuesResponse
+        //                     {
+        //                         Robot = host,
+        //                         RobotId = host.Id,
+        //                         State = queuesResponse.State,
+        //                         Url = queuesResponse.Url
+        //                     };
+        //
+        //                     await db.MissionQueuesResponse.AddAsync(missq);
+        //                 }
+        //             }
+        //             await db.SaveChangesAsync();
+        //         }
+        //     }
+        //     catch (Exception e)
+        //     {
+        //         _logger.LogCritical("The Robot may be is offline");
+        //     }
+        // }
 
         private void SetRobotOffline(Robot host, ApplicationDbContext db, Exception e)
         {
             var robot = db.Robots.Find(host.Id);
             robot.IsOnline = false;
-            robot.StateText = "Offline";
             db.Update(robot);
             db.SaveChanges();
+            _logger.LogCritical("The Robot may be is offline: " + host.BasePath);
         }
 
         private static HttpRequestMessage HttpRequestMessage(Robot host, string path)

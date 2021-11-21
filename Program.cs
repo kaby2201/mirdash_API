@@ -30,7 +30,7 @@ namespace backend
                 var rm = services.GetRequiredService<RoleManager<IdentityRole>>();
 
                 // Initialise the database using the initializer from Data/ExampleDbInitializer.cs
-                ApplicationDbInitializer.Init(context, um, rm, environment.IsDevelopment());
+                ApplicationDbInitializer.Init(context, um, rm, true);
             }
             host.Run();
         }

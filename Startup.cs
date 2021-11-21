@@ -44,22 +44,23 @@ namespace backend
                 options.Password.RequireDigit = false;
                 options.Password.RequireNonAlphanumeric = false;
             });
-            
+
             services.AddSpaStaticFiles(options => { options.RootPath = "wwwroot"; });
-            
-            if (_environment.IsDevelopment()) // Database used during development
-            {
-                // Register the database context as a service. Use SQLite for this
-                services.AddDbContext<ApplicationDbContext>(options =>
-                    options.UseSqlite(_configuration.GetConnectionString("ApiDatabase")));
-            }
+
+
+            // Register the database context as a service. Use SQLite for this
+            services.AddDbContext<ApplicationDbContext>(options =>
+                options.UseSqlite(_configuration.GetConnectionString("ApiDatabase")));
+
+            /*
             else // Database used in all other environments (production etc)
             {
                 // Register the database context as a service. Use PostgreSQL server for this
                 services.AddDbContext<ApplicationDbContext>(options =>
                     options.UseNpgsql(_configuration.GetConnectionString("ApiDatabase")));
             }
-            
+            */
+
             services.AddIdentity<ApplicationUser, IdentityRole>()
                 .AddRoles<IdentityRole>()
                 .AddEntityFrameworkStores<ApplicationDbContext>();
@@ -74,7 +75,7 @@ namespace backend
             // configure jwt authentication
             var appSettings = appSettingsSection.Get<AppSettings>();
             var key = Encoding.ASCII.GetBytes(appSettings.Secret);
-            
+
             services.AddAuthentication(x =>
                 {
                     x.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;

@@ -9,7 +9,6 @@ using Microsoft.AspNetCore.Mvc;
 
 namespace backend.Controllers
 {
-    [Authorize]
     [ApiController]
     [Route("api/[controller]")]
     public class DummyimageController : Controller
